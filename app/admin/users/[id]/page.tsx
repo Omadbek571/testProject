@@ -1,34 +1,44 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState, useCallback } from "react";
+import { useRouter, useParams } from "next/navigation"; // useParams import qilindi
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowLeft, BarChart2, FileText, Mail, Phone, Save, User, Wallet } from "lucide-react";
 import { AdminLayout } from "@/components/admin/admin-layout";
 import { Label } from "@/components/ui/label";
 import axios from "axios";
 
-// Komponentning interfeysi
-interface UserDetailPageProps {
-  params: Promise<{ id: string }>; // params Promise sifatida aniqlanadi
-}
+// Interfeyslar o'rniga, ma'lumotlarni to'g'ridan-to'g'ri ishlatamiz,
+// lekin keladigan ma'lumot strukturasini yodda tutish muhim.
 
-export default function UserDetailPage({ params }: UserDetailPageProps) {
+// Komponent
+export default function UserDetailPage() { // params prop o'chirildi
   const router = useRouter();
-  const [userId, setUserId] = useState<string | null>(null); // userId ni state sifatida aniqlaymiz
-  const [activeTab, setActiveTab] = useState("profile");
-  const [userInfo, setUserInfo] = useState<any>({});
-  const [isLoading, setIsLoading] = useState(false);
-  const [paymentsHistoryUser, setPaymentsHistory] = useState<any[]>([]);
-  const [statistichis, setStatistichis] = useState<any[]>([]);
-  const [token, setToken] = useState<string | null>(null); // Token uchun state
+  const params = useParams(); // useParams hook'i ishlatildi
+  const userId = params?.id; // userId params'dan olinadi (string yoki undefined bo'lishi mumkin)
 
+  const [activeTab, setActiveTab] = useState("profile");
+  const [token, setToken] = useState(null);
+
+  // State'lar (TypeScript interfeyslarisiz)
+  const [userInfo, setUserInfo] = useState(null);
+  const [testHistory, setTestHistory] = useState([]);
+  const [paymentsHistoryUser, setPaymentsHistory] = useState([]);
+  const [statistics, setStatistics] = useState(null);
+
+  // Loading states
+  const [isLoadingProfile, setIsLoadingProfile] = useState(false);
+  const [isLoadingTests, setIsLoadingTests] = useState(false);
+  const [isLoadingPayments, setIsLoadingPayments] = useState(false);
+  const [isLoadingStats, setIsLoadingStats] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false); // Umumiy submitlar uchun
+
+  // Forma uchun state
   const [formData, setFormData] = useState({
     full_name: "",
     email: "",
@@ -39,371 +49,398 @@ export default function UserDetailPage({ params }: UserDetailPageProps) {
     target_university: "",
     target_faculty: "",
     about_me: "",
-    status: "Faol",
   });
 
-  // params ni hal qilish uchun useEffect ishlatamiz
+  // Tokenni olish uchun useEffect
   useEffect(() => {
-    const resolveParams = async () => {
-      const resolvedParams = await params; // params ni await qilamiz
-      setUserId(resolvedParams.id); // userId ni state ga o‘rnatamiz
-    };
-
-    resolveParams();
-  }, [params]);
-
-  // Tokenni olish
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const storedToken = localStorage.getItem("token");
+    const storedToken = localStorage.getItem("token");
+    if (storedToken) {
       setToken(storedToken);
-    }
-  }, []);
-
-  // Foydalanuvchi ma'lumotlarini API'dan olish
-  const fetchUserData = (callback?: (data: any) => void) => {
-    if (!token) {
-      alert("Tizimga kirish uchun token topilmadi. Iltimos, qayta kiring.");
+    } else {
+      // Agar token bo'lmasa, login sahifasiga o'tkazish kerak
+      console.error("Token topilmadi, login sahifasiga yo'naltirilmoqda.");
       router.push("/");
-      return;
     }
+  }, [router]);
 
-    if (!userId) return; // userId hali aniqlanmagan bo‘lsa, so‘rov yubormaymiz
+  // Xatolikni boshqarish uchun helper funksiya
+  const handleApiError = useCallback((error, context) => {
+    console.error(`${context} xatolik:`, error);
+    let message = `Xatolik yuz berdi: ${context}.`;
+    // Axios xatoligini tekshirish
+    if (axios.isAxiosError(error)) {
+      if (error.response?.status === 401) {
+        // Token eskirgan yoki noto'g'ri
+        localStorage.removeItem("token");
+        setToken(null);
+        router.push("/"); // Login sahifasiga yo'naltirish
+        message = "Sessiya muddati tugadi. Iltimos, qayta kiring.";
+      } else if (error.response?.data) {
+        // Backenddan kelgan xatolikni ko'rsatishga harakat qilish
+        const errorData = error.response.data;
+        message = `Server xatoligi (${error.response.status}): ${JSON.stringify(errorData.detail || errorData)}`;
+      } else {
+        message = `Server bilan bog'lanishda xatolik: ${error.message}`;
+      }
+    } else if (error instanceof Error) {
+       message = error.message;
+    }
+    alert(message); // Foydalanuvchiga xabarni ko'rsatish (yaxshiroq UI komponenti bilan almashtirish mumkin)
+  }, [router]);
 
-    setIsLoading(true);
+
+  // --- Ma'lumotlarni Olish Funksiyalari (useCallback bilan) ---
+
+  const fetchUserData = useCallback(() => {
+    // userId mavjudligini tekshiramiz
+    if (!token || !userId) {
+        console.log("Token yoki UserID mavjud emas, foydalanuvchi ma'lumotlari yuklanmaydi.");
+        return;
+    }
+    setIsLoadingProfile(true);
+    console.log(`Fetching user data for ID: ${userId} with token: ${token ? '...' : 'none'}`);
     axios
-      .get(`https://testonline.pythonanywhere.com/api/admin/users/${Number(userId)}/`, {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+      .get(`https://testonline.pythonanywhere.com/api/admin/users/${userId}/`, {
+        headers: { Authorization: `Bearer ${token}` },
       })
       .then((res) => {
-        setUserInfo(res.data);
+        const userData = res.data;
+        let status = 'Nofaol'; // Default status
+        if (userData.is_active && !userData.is_blocked) {
+            status = 'Faol';
+        } else if (userData.is_blocked) {
+            status = 'Bloklangan';
+        }
+        setUserInfo({...userData, status }); // Statusni qo'shib userInfo ni o'rnatamiz
         setFormData({
-          full_name: res.data.full_name || "",
-          email: res.data.email || "",
-          phone_number: res.data.phone_number || "",
-          address: res.data.address || "",
-          study_place: res.data.study_place || "",
-          grade: res.data.grade || "",
-          target_university: res.data.target_university || "",
-          target_faculty: res.data.target_faculty || "",
-          about_me: res.data.about_me || "",
-          status: res.data.status || "Faol",
+          full_name: userData.full_name || "",
+          email: userData.email || "",
+          phone_number: userData.phone_number || "",
+          address: userData.address || "",
+          study_place: userData.study_place || "",
+          grade: userData.grade || "",
+          target_university: userData.target_university || "",
+          target_faculty: userData.target_faculty || "",
+          about_me: userData.about_me || "",
         });
-        if (callback) callback(res.data);
       })
-      .catch((err) => {
-        console.log("Foydalanuvchi ma'lumotlarini olishda xatolik:", err);
-        if (err.response?.status === 401) {
-          alert("Avtorizatsiya xatosi: Token noto‘g‘ri yoki muddati o‘tgan. Iltimos, qayta kiring.");
-          localStorage.removeItem("token");
-          router.push("/");
-        } else {
-          alert("Foydalanuvchi ma'lumotlarini olishda xatolik yuz berdi!");
-        }
-      })
-      .finally(() => {
-        setIsLoading(false);
-      });
-  };
+      .catch((err) => handleApiError(err, "Foydalanuvchi ma'lumotlarini olish"))
+      .finally(() => setIsLoadingProfile(false));
+  }, [token, userId, handleApiError]); // userId ni dependency ga qo'shamiz
 
-  // Foydalanuvchi to'lov tarixini olish
-  const fetchPaymentsHistory = () => {
+  const fetchTestHistory = useCallback(() => {
     if (!token || !userId) return;
-
+    setIsLoadingTests(true);
     axios
-      .get(`https://testonline.pythonanywhere.com/api/admin/users/${Number(userId)}/payment-history/`, {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+      .get(`https://testonline.pythonanywhere.com/api/admin/users/${userId}/test-history/`, {
+        headers: { Authorization: `Bearer ${token}` },
       })
       .then((res) => {
-        if (res.status === 200) {
-          setPaymentsHistory(res.data.results || []);
-        }
+        // API javobini tekshiramiz (sahifalash bo'lsa .results ni olish kerak)
+        const results = Array.isArray(res.data) ? res.data : res.data?.results;
+        setTestHistory(Array.isArray(results) ? results : []); // Har doim massiv qaytarish
+        console.log("Test tarixi:", results); // Konsolga chiqarish
       })
       .catch((err) => {
-        console.log("To'lov tarixini olishda xatolik:", err);
-        if (err.response?.status === 401) {
-          alert("Avtorizatsiya xatosi: Token noto‘g‘ri yoki muddati o‘tgan. Iltimos, qayta kiring.");
-          localStorage.removeItem("token");
-          router.push("/");
-        }
-      });
-  };
+        handleApiError(err, "Test tarixini olish");
+        setTestHistory([]); // Xatolik bo'lsa tozalash
+      })
+      .finally(() => setIsLoadingTests(false));
+  }, [token, userId, handleApiError]); // userId ni dependency ga qo'shamiz
 
-  // Foydalanuvchi statistikasini olish
-  const fetchStatistics = () => {
+  const fetchPaymentsHistory = useCallback(() => {
     if (!token || !userId) return;
-
+    setIsLoadingPayments(true);
     axios
-      .get(`https://testonline.pythonanywhere.com/api/admin/users/${Number(userId)}/statistics/`, {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+      .get(`https://testonline.pythonanywhere.com/api/admin/users/${userId}/payment-history/`, {
+        headers: { Authorization: `Bearer ${token}` },
       })
       .then((res) => {
-        setStatistichis(Array.isArray(res.data) ? res.data : [res.data]);
+        const results = Array.isArray(res.data) ? res.data : res.data?.results;
+         setPaymentsHistory(Array.isArray(results) ? results : []);
       })
       .catch((err) => {
-        console.log("Statistika olishda xatolik:", err);
-        if (err.response?.status === 401) {
-          alert("Avtorizatsiya xatosi: Token noto‘g‘ri yoki muddati o‘tgan. Iltimos, qayta kiring.");
-          localStorage.removeItem("token");
-          router.push("/");
-        }
-      });
-  };
+          handleApiError(err, "To'lovlar tarixini olish");
+          setPaymentsHistory([]);
+      })
+      .finally(() => setIsLoadingPayments(false));
+  }, [token, userId, handleApiError]); // userId ni dependency ga qo'shamiz
 
-  // Komponent yuklanganda ma'lumotlarni olish
+  const fetchStatistics = useCallback(() => {
+    if (!token || !userId) return;
+    setIsLoadingStats(true);
+    axios
+      .get(`https://testonline.pythonanywhere.com/api/admin/users/${userId}/statistics/`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .then((res) => {
+        setStatistics(res.data); // Obyekt kelishi kutiladi
+      })
+      .catch((err) => {
+          handleApiError(err, "Statistika olish");
+          setStatistics(null);
+      })
+      .finally(() => setIsLoadingStats(false));
+  }, [token, userId, handleApiError]); // userId ni dependency ga qo'shamiz
+
+  // Asosiy ma'lumotlarni olish uchun useEffect
   useEffect(() => {
+    // userId va token mavjud bo'lgandagina funksiyalarni chaqiramiz
     if (token && userId) {
       fetchUserData();
+      fetchTestHistory();
       fetchPaymentsHistory();
       fetchStatistics();
     }
-  }, [token, userId]);
+    // Agar userId o'zgarsa (nazariy jihatdan bu sahifada o'zgarmaydi, lekin to'g'ri dependency)
+    // yoki token o'zgarsa (masalan, login/logout dan keyin) qayta chaqiriladi.
+  }, [token, userId, fetchUserData, fetchTestHistory, fetchPaymentsHistory, fetchStatistics]);
 
-  // userId hali aniqlanmagan bo‘lsa, loading ko‘rsatamiz
-  if (!userId) {
-    return <div className="p-6 text-center">Yuklanmoqda...</div>;
-  }
-
-  const userData = {
-    id: userId,
-    name: userInfo.full_name || "",
-    phone: userInfo.phone_number || "",
-    email: userInfo.email || "",
-    registrationDate: new Date().toISOString(),
-    status: formData.status || "Faol",
-    role: userInfo.role_display || "Student",
-    balance: userInfo.balance ?? 0,
-    address: userInfo.address || "",
-    school: userInfo.study_place || "",
-    grade: userInfo.grade || "",
-    targetUniversity: userInfo.target_university || "",
-    targetFaculty: userInfo.target_faculty || "",
-    completedTests: 24,
-    averageScore: 78,
-    notes: userInfo.about_me || "",
-  };
-
-  
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  // --- Form Handlerlar ---
+  const handleInputChange = (e) => {
     const { id, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [id]: value,
-    }));
+    setFormData((prev) => ({ ...prev, [id]: value }));
   };
 
-  const handleStatusChange = (checked: boolean) => {
-    setFormData((prev) => ({
-      ...prev,
-      status: checked ? "Faol" : "Nofaol",
-    }));
-  };
-
+  // --- API Action Handlerlar ---
   const handleSaveChanges = () => {
-    if (isLoading) {
-      alert("Ma'lumotlar hali yuklanmoqda, iltimos kuting...");
-      return;
-    }
+    if (isSubmitting || !token || !userId || !userInfo) return;
 
-    setIsLoading(true);
+    setIsSubmitting(true);
+
     const updatedData = {
       full_name: formData.full_name,
-      phone_number: formData.phone_number,
-      email: formData.email,
-      birth_date: userInfo.birth_date || "2025-04-09",
-      gender: userInfo.gender || "male",
-      region: userInfo.region || "",
-      study_place: formData.study_place,
-      grade: formData.grade,
-      address: formData.address,
-      target_university: formData.target_university,
-      target_faculty: formData.target_faculty,
-      about_me: formData.about_me,
+      phone_number: formData.phone_number || null,
+      // email: formData.email, // Agar emailni tahrirlash mumkin bo'lsa
+      birth_date: userInfo.birth_date, // Formada yo'q, originalini qoldiramiz
+      gender: userInfo.gender,
+      region: userInfo.region,
+      study_place: formData.study_place || null,
+      grade: formData.grade || null,
+      address: formData.address || null,
+      target_university: formData.target_university || null,
+      target_faculty: formData.target_faculty || null,
+      about_me: formData.about_me || null,
+      // Boshqa maydonlar (role, balance, is_active, etc.) bu yerda o'zgartirilmaydi
     };
 
     axios
-      .put(
-        `https://testonline.pythonanywhere.com/api/admin/users/${Number(userId)}/`,
-        updatedData,
-        {
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      )
-      .then((response) => {
-        if (response.status === 200) {
-          alert("Ma'lumotlar muvaffaqiyatli yangilandi!");
-          setUserInfo(response.data);
-          fetchUserData();
-        }
+      // PATCH afzalroq, faqat o'zgargan maydonlarni yuboradi
+      .patch(`https://testonline.pythonanywhere.com/api/admin/users/${userId}/`, updatedData, {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      .then(() => { // Javobda yangilangan User kelishi mumkin, uni ishlatsa ham bo'ladi
+        alert("Ma'lumotlar muvaffaqiyatli yangilandi!");
+        fetchUserData(); // Ma'lumotlarni qayta yuklash
       })
       .catch((error) => {
-        console.error("Yangilashda xatolik:", error);
-        if (error.response?.status === 401) {
-          alert("Avtorizatsiya xatosi: Token noto‘g‘ri yoki muddati o‘tgan. Iltimos, qayta kiring.");
-          localStorage.removeItem("token");
-          router.push("/");
-        } else {
-          alert("Ma'lumotlarni yangilashda xatolik yuz berdi!");
-        }
+         handleApiError(error, "Ma'lumotlarni yangilash");
       })
       .finally(() => {
-        setIsLoading(false);
+        setIsSubmitting(false);
       });
   };
 
-  const handleBlockUser = () => {
-    if (!token) {
-      alert("Tizimga kirish uchun token topilmadi. Iltimos, qayta kiring.");
-      router.push("/");
-      return;
-    }
-
-    setIsLoading(true);
-    axios
-      .post(
-        `https://testonline.pythonanywhere.com/api/admin/users/${Number(userId)}/block/`,
-        {},
-        {
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      )
-      .then((res) => {
+   const handleBlockUser = () => {
+    if (!token || !userId || isSubmitting) return;
+    setIsSubmitting(true);
+    axios.post(`https://testonline.pythonanywhere.com/api/admin/users/${userId}/block/`, {}, {
+        headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(() => {
         alert("Foydalanuvchi muvaffaqiyatli bloklandi!");
-        fetchUserData(); // Ma'lumotlarni yangilash
+        fetchUserData(); // Statusni yangilash uchun
       })
-      .catch((err) => {
-        console.log("Bloklashda xatolik:", err);
-        if (err.response?.status === 401) {
-          alert("Avtorizatsiya xatosi: Token noto‘g‘ri yoki muddati o‘tgan. Iltimos, qayta kiring.");
-          localStorage.removeItem("token");
-          router.push("/");
-        } else {
-          alert("Foydalanuvchi bloklashda xatolik yuz berdi!");
-        }
-      })
-      .finally(() => {
-        setIsLoading(false);
-      });
+      .catch((err) => handleApiError(err, "Foydalanuvchini bloklash"))
+      .finally(() => setIsSubmitting(false));
   };
 
   const handleUnblockUser = () => {
-    if (!token) {
-      alert("Tizimga kirish uchun token topilmadi. Iltimos, qayta kiring.");
-      router.push("/");
-      return;
-    }
-
-    setIsLoading(true);
-    axios
-      .post(
-        `https://testonline.pythonanywhere.com/api/admin/users/${Number(userId)}/unblock/`,
-        {},
-        {
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      )
-      .then((res) => {
+    if (!token || !userId || isSubmitting) return;
+    setIsSubmitting(true);
+    axios.post(`https://testonline.pythonanywhere.com/api/admin/users/${userId}/unblock/`, {}, {
+        headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(() => {
         alert("Foydalanuvchi muvaffaqiyatli blokdan ochildi!");
-        fetchUserData(); // Ma'lumotlarni yangilash
+        fetchUserData(); // Statusni yangilash uchun
       })
-      .catch((err) => {
-        console.log("Blokdan ochishda xatolik:", err);
-        if (err.response?.status === 401) {
-          alert("Avtorizatsiya xatosi: Token noto‘g‘ri yoki muddati o‘tgan. Iltimos, qayta kiring.");
-          localStorage.removeItem("token");
-          router.push("/");
-        } else {
-          alert("Foydalanuvchi blokdan ochishda xatolik yuz berdi!");
-        }
-      })
-      .finally(() => {
-        setIsLoading(false);
-      });
+      .catch((err) => handleApiError(err, "Foydalanuvchini blokdan ochish"))
+      .finally(() => setIsSubmitting(false));
   };
 
   const handleDeleteUser = () => {
-    if (!token) {
-      alert("Tizimga kirish uchun token topilmadi. Iltimos, qayta kiring.");
-      router.push("/");
-      return;
-    }
-
-    if (confirm("Haqiqatan ham bu foydalanuvchini o'chirmoqchimisiz?")) {
-      setIsLoading(true);
-      axios
-        .delete(`https://testonline.pythonanywhere.com/api/admin/users/${Number(userId)}/`, {
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-        })
+    if (!token || !userId || isSubmitting) return;
+    // Tasdiqlash dialogini ko'rsatish
+    if (window.confirm("Haqiqatan ham bu foydalanuvchini o'chirmoqchimisiz? Bu amalni qaytarib bo'lmaydi.")) {
+      setIsSubmitting(true);
+      axios.delete(`https://testonline.pythonanywhere.com/api/admin/users/${userId}/`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
         .then((res) => {
-          alert("Foydalanuvchi muvaffaqiyatli o'chirildi!");
-          router.push("/admin/dashboard");
-        })
-        .catch((err) => {
-          console.log("O'chirishda xatolik:", err);
-          if (err.response?.status === 401) {
-            alert("Avtorizatsiya xatosi: Token noto‘g‘ri yoki muddati o‘tgan. Iltimos, qayta kiring.");
-            localStorage.removeItem("token");
-            router.push("/");
+          // Odatda DELETE 204 No Content qaytaradi
+          if (res.status === 204) {
+             alert("Foydalanuvchi muvaffaqiyatli o'chirildi!");
+             router.push("/admin/dashboard"); // Dashboardga qaytish
           } else {
-            alert("Foydalanuvchi o'chirishda xatolik yuz berdi!");
+             // Kamdan-kam hollarda 200 yoki 202 kelishi mumkin
+             console.warn(`Foydalanuvchi o'chirildi, lekin kutilmagan status kodi: ${res.status}`);
+             alert("Foydalanuvchi o'chirildi!");
+             router.push("/admin/dashboard");
           }
         })
-        .finally(() => {
-          setIsLoading(false);
-        });
+        .catch((err) => handleApiError(err, "Foydalanuvchini o'chirish"))
+        .finally(() => setIsSubmitting(false));
     }
   };
 
+  // Balansni to'ldirish sahifasiga o'tish
+  const navigateToAddBalance = () => {
+      if (userId) {
+          router.push(`/admin/payments/add/${userId}`);
+      } else {
+          console.error("Balansni to'ldirish uchun UserID topilmadi.");
+      }
+  }
+
+   // --- Render Logic ---
+
+  // Agar UserID yo'q bo'lsa (URL'dan olinmagan bo'lsa)
+  if (!userId) {
+      return (
+          <AdminLayout>
+              <div className="p-6 text-center text-red-600">Foydalanuvchi ID si topilmadi. URL manzilini tekshiring.</div>
+          </AdminLayout>
+      );
+  }
+
+  // Agar boshlang'ich ma'lumotlar yuklanayotgan bo'lsa
+  if (isLoadingProfile && !userInfo) {
+    return (
+      <AdminLayout>
+        <div className="p-6 text-center">Foydalanuvchi ma'lumotlari yuklanmoqda...</div>
+      </AdminLayout>
+    );
+  }
+
+  // Agar yuklash tugagan va userInfo hali ham null bo'lsa (xatolik yoki topilmadi)
+  if (!isLoadingProfile && !userInfo) {
+     return (
+      <AdminLayout>
+         <div className="p-6">
+             <Button variant="outline" className="mb-4" onClick={() => router.back()}>
+                 <ArrowLeft className="h-4 w-4 mr-2" /> Orqaga
+             </Button>
+             <Card>
+                <CardContent className="p-6 text-center text-red-600">
+                    Foydalanuvchi topilmadi yoki ma'lumotlarni yuklashda xatolik yuz berdi.
+                </CardContent>
+             </Card>
+         </div>
+      </AdminLayout>
+     );
+  }
+
+  // --- Status va Ranglarni Aniqlash Funksiyalari ---
+  const getStatusVariant = (status) => {
+      switch (status) {
+          case 'Faol': return 'default';
+          case 'Bloklangan': return 'destructive';
+          case 'Nofaol': return 'secondary';
+          default: return 'secondary';
+      }
+  };
+   const getPaymentStatusVariant = (status) => {
+    switch (status) {
+      case 'completed':
+      case 'success': return 'default'; // Yashil
+      case 'pending':
+      case 'processing': return 'secondary'; // Sariq/Kulrang
+      case 'failed':
+      case 'cancelled': return 'destructive'; // Qizil
+      default: return 'outline';
+    }
+  };
+   const getPaymentStatusClass = (status) => {
+    switch (status) {
+      case 'completed':
+      case 'success': return 'bg-green-100 text-green-800';
+      case 'pending':
+      case 'processing': return 'bg-yellow-100 text-yellow-800';
+      case 'failed':
+      case 'cancelled': return 'bg-red-100 text-red-800';
+      default: return '';
+    }
+  };
+  const getTestStatusVariant = (status) => {
+      switch (status) {
+          case 'completed': return 'default'; // Yashil
+          case 'in_progress': return 'secondary'; // Sariq
+          case 'pending': return 'outline'; // Kulrang
+          // Boshqa statuslar bo'lsa, qo'shish mumkin
+          default: return 'outline';
+      }
+  };
+   const getTestStatusClass = (status) => {
+      switch (status) {
+          case 'completed': return 'bg-green-100 text-green-800';
+          case 'in_progress': return 'bg-yellow-100 text-yellow-800';
+          case 'pending': return 'bg-gray-100 text-gray-800';
+          default: return '';
+      }
+  };
+
+  // --- JSX Render ---
   return (
     <AdminLayout>
       <div className="p-6">
-        {isLoading && <div className="text-center">Yuklanmoqda...</div>}
-        <div className="flex justify-between items-center mb-6">
+        {/* Header */}
+        <div className="flex flex-wrap justify-between items-center mb-6 gap-4">
           <div className="flex items-center">
             <Button variant="outline" className="mr-4" onClick={() => router.push("/admin/dashboard")}>
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Orqaga
+              <ArrowLeft className="h-4 w-4 mr-2" /> Orqaga
             </Button>
             <div>
-              <h2 className="text-2xl font-bold mb-1">Foydalanuvchi ma'lumotlari</h2>
+              {/* userInfo mavjudligini tekshiramiz */}
+              <h2 className="text-2xl font-bold mb-1">Foydalanuvchi: {userInfo?.full_name || 'Yuklanmoqda...'}</h2>
               <p className="text-gray-600">ID: {userId}</p>
             </div>
           </div>
-          <div className="flex space-x-2">
-            <Button variant="outline" onClick={handleUnblockUser} disabled={isLoading}>
-              Blokdan ochish
-            </Button>
-            <Button variant="outline" onClick={handleBlockUser} disabled={isLoading}>
-              Bloklash
-            </Button>
-            <Button variant="destructive" onClick={handleDeleteUser} disabled={isLoading}>
-              O'chirish
-            </Button>
-          </div>
+          {/* Action Buttons (userInfo mavjud bo'lganda ko'rsatiladi) */}
+          {userInfo && (
+            <div className="flex space-x-2">
+              <Button
+                variant="outline"
+                onClick={handleUnblockUser}
+                disabled={isSubmitting || !userInfo.is_blocked}
+                aria-label="Foydalanuvchini blokdan ochish"
+              >
+                Blokdan ochish
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleBlockUser}
+                disabled={isSubmitting || userInfo.is_blocked || !userInfo.is_active}
+                aria-label="Foydalanuvchini bloklash"
+              >
+                Bloklash
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleDeleteUser}
+                disabled={isSubmitting}
+                aria-label="Foydalanuvchini o'chirish"
+              >
+                O'chirish
+              </Button>
+            </div>
+          )}
         </div>
 
+        {/* Tabs */}
         <Tabs defaultValue="profile" value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="mb-6">
             <TabsTrigger value="profile">Profil</TabsTrigger>
@@ -412,349 +449,310 @@ export default function UserDetailPage({ params }: UserDetailPageProps) {
             <TabsTrigger value="statistics">Statistika</TabsTrigger>
           </TabsList>
 
+          {/* --- Profile Tab --- */}
           <TabsContent value="profile">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Left Side: Edit Form */}
               <div className="md:col-span-2">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="flex items-center">
-                      <User className="mr-2 h-5 w-5 text-blue-500" />
-                      Shaxsiy ma'lumotlar asfas
-                    </CardTitle>
-                    <CardDescription>Foydalanuvchining shaxsiy ma'lumotlari</CardDescription>
+                    <CardTitle className="flex items-center"><User className="mr-2 h-5 w-5 text-blue-500" />Shaxsiy ma'lumotlarni tahrirlash</CardTitle>
+                    <CardDescription>Foydalanuvchining asosiy ma'lumotlari</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="full_name">To'liq ism</Label>
-                          <Input
-                            id="full_name"
-                            value={formData.full_name}
-                            onChange={handleInputChange}
-                          />
+                    {/* Formani faqat userInfo yuklangandan keyin ko'rsatamiz */}
+                    {isLoadingProfile && <div className="text-center">Forma yuklanmoqda...</div>}
+                    {!isLoadingProfile && userInfo && (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="space-y-2"><Label htmlFor="full_name">To'liq ism</Label><Input id="full_name" value={formData.full_name} onChange={handleInputChange} disabled={isSubmitting} /></div>
+                          {/* Emailni tahrirlash kerak bo'lsa: */}
+                          {/* <div className="space-y-2"><Label htmlFor="email">Email</Label><Input id="email" type="email" value={formData.email} onChange={handleInputChange} disabled={isSubmitting} /></div> */}
+                          <div className="space-y-2"><Label htmlFor="phone_number">Telefon</Label><Input id="phone_number" value={formData.phone_number} onChange={handleInputChange} disabled={isSubmitting} placeholder="+998 XX XXX XX XX"/></div>
+                          <div className="space-y-2"><Label htmlFor="address">Manzil</Label><Input id="address" value={formData.address} onChange={handleInputChange} disabled={isSubmitting} /></div>
+                          <div className="space-y-2"><Label htmlFor="study_place">O'qish joyi</Label><Input id="study_place" value={formData.study_place} onChange={handleInputChange} disabled={isSubmitting} /></div>
+                          <div className="space-y-2"><Label htmlFor="grade">Sinf/Kurs</Label><Input id="grade" value={formData.grade} onChange={handleInputChange} disabled={isSubmitting} /></div>
+                          <div className="space-y-2"><Label htmlFor="target_university">Maqsad universitet</Label><Input id="target_university" value={formData.target_university} onChange={handleInputChange} disabled={isSubmitting} /></div>
+                          <div className="space-y-2"><Label htmlFor="target_faculty">Maqsad fakultet</Label><Input id="target_faculty" value={formData.target_faculty} onChange={handleInputChange} disabled={isSubmitting} /></div>
                         </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="email">Email</Label>
-                          <Input
-                            id="email"
-                            value={formData.email}
-                            onChange={handleInputChange}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="phone_number">Telefon</Label>
-                          <Input
-                            id="phone_number"
-                            value={formData.phone_number}
-                            onChange={handleInputChange}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="address">Manzil</Label>
-                          <Input
-                            id="address"
-                            value={formData.address}
-                            onChange={handleInputChange}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="study_place">Maktab</Label>
-                          <Input
-                            id="study_place"
-                            value={formData.study_place}
-                            onChange={handleInputChange}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="grade">Sinf</Label>
-                          <Input
-                            id="grade"
-                            value={formData.grade}
-                            onChange={handleInputChange}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="target_university">Maqsad universitet</Label>
-                          <Input
-                            id="target_university"
-                            value={formData.target_university}
-                            onChange={handleInputChange}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="target_faculty">Maqsad fakultet</Label>
-                          <Input
-                            id="target_faculty"
-                            value={formData.target_faculty}
-                            onChange={handleInputChange}
-                          />
+                        <div className="space-y-2"><Label htmlFor="about_me">Qo'shimcha ma'lumotlar (Bio)</Label><Textarea id="about_me" value={formData.about_me} onChange={handleInputChange} rows={4} disabled={isSubmitting} /></div>
+                        {/* Foydalanuvchi Holati (o'zgartirilmaydi, faqat ko'rsatiladi) */}
+                        <div className="flex items-center justify-between p-3 border rounded-md bg-muted/50">
+                          <div><Label className="text-sm font-medium">Foydalanuvchi Holati</Label></div>
+                          <Badge variant={getStatusVariant(userInfo.status)}>{userInfo.status || 'Noma\'lum'}</Badge>
                         </div>
                       </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="about_me">Qo'shimcha ma'lumotlar</Label>
-                        <Textarea
-                          id="about_me"
-                          value={formData.about_me}
-                          onChange={handleInputChange}
-                          rows={4}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <div className="space-y-0.5">
-                          <Label htmlFor="active-status">Faol holati</Label>
-                          <div className="text-sm text-gray-500">Foydalanuvchi faol holatini o'zgartirish</div>
-                        </div>
-                        <Switch
-                          id="active-status"
-                          checked={formData.status === "Faol"}
-                          onCheckedChange={handleStatusChange}
-                        />
-                      </div>
-                    </div>
+                    )}
                   </CardContent>
                   <CardFooter className="flex justify-end">
-                    <Button onClick={handleSaveChanges} disabled={isLoading}>
+                    <Button onClick={handleSaveChanges} disabled={isSubmitting || isLoadingProfile}>
                       <Save className="mr-2 h-4 w-4" />
-                      Saqlash
+                      {isSubmitting ? 'Saqlanmoqda...' : 'O\'zgarishlarni Saqlash'}
                     </Button>
                   </CardFooter>
                 </Card>
               </div>
+
+              {/* Right Side: User Info & Balance */}
               <div>
+                {/* User Info Card */}
                 <Card className="mb-6">
-                  <CardHeader>
-                    <CardTitle className="flex items-center">
-                      <User className="mr-2 h-5 w-5 text-blue-500" />
-                      Foydalanuvchi
-                    </CardTitle>
-                  </CardHeader>
+                  <CardHeader><CardTitle className="flex items-center"><User className="mr-2 h-5 w-5 text-blue-500" />Foydalanuvchi haqida</CardTitle></CardHeader>
                   <CardContent>
-                    <div className="flex flex-col items-center">
-                      <div className="w-24 h-24 rounded-full bg-blue-100 flex items-center justify-center mb-4">
-                        <User className="h-12 w-12 text-blue-600" />
-                      </div>
-                      <h3 className="text-xl font-bold mb-1">{userData.name}</h3>
-                      {/* //////////////////////////// test-1 */}
-                      <Badge className="mb-4">{userData.role}</Badge>
-                      <div className="w-full space-y-2">
-                        <div className="flex items-center">
-                          <Mail className="h-4 w-4 text-gray-500 mr-2" />
-                          <span className="text-sm">{userData.email}</span>
+                    {isLoadingProfile && <div className="text-center">Yuklanmoqda...</div>}
+                    {userInfo && (
+                      <div className="flex flex-col items-center text-center">
+                        {/* Profile Picture */}
+                        <div className="w-20 h-20 rounded-full bg-blue-100 flex items-center justify-center mb-3 overflow-hidden">
+                          {userInfo.profile_picture ? (
+                              <img src={userInfo.profile_picture} alt={userInfo.full_name || 'Profil rasmi'} className="w-full h-full object-cover" />
+                          ) : (
+                              <User className="h-10 w-10 text-blue-600" />
+                          )}
                         </div>
-                        <div className="flex items-center">
-                          <Phone className="h-4 w-4 text-gray-500 mr-2" />
-                          <span className="text-sm">{userData.phone}</span>
+                        <h3 className="text-lg font-semibold mb-1">{userInfo.full_name}</h3>
+                        <Badge variant="secondary" className="mb-3">{userInfo.role_display || userInfo.role}</Badge>
+                        <div className="w-full space-y-1 text-sm text-left">
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-500 flex items-center"><Mail className="h-3 w-3 mr-1.5" />Email:</span>
+                            <span className="truncate" title={userInfo.email}>{userInfo.email || '-'}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-500 flex items-center"><Phone className="h-3 w-3 mr-1.5" />Telefon:</span>
+                            <span>{userInfo.phone_number || '-'}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-gray-500">Ro'yxatdan o'tgan:</span>
+                            <span>{userInfo.date_joined ? new Date(userInfo.date_joined).toLocaleDateString() : '-'}</span>
+                          </div>
+                           <div className="flex items-center justify-between mt-2 pt-2 border-t">
+                            <span className="text-gray-500">Holati:</span>
+                            <Badge variant={getStatusVariant(userInfo.status)} size="sm">{userInfo.status || 'Noma\'lum'}</Badge>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )}
                   </CardContent>
                 </Card>
+                {/* Balance Card */}
                 <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center">
-                      <Wallet className="mr-2 h-5 w-5 text-blue-500" />
-                      Balans
-                    </CardTitle>
-                  </CardHeader>
+                  <CardHeader><CardTitle className="flex items-center"><Wallet className="mr-2 h-5 w-5 text-blue-500" />Balans</CardTitle></CardHeader>
                   <CardContent>
-                    <div className="text-center">
-                      <div className="text-3xl font-bold mb-2">{userData.balance.toLocaleString()} so'm</div>
-                      <Button className="w-full" onClick={() => router.push(`/admin/payments/add/${userId}`)}>
-                        Balansni to'ldirish
-                      </Button>
-                    </div>
+                    {isLoadingProfile && <div className="text-center">Yuklanmoqda...</div>}
+                    {userInfo && (
+                      <div className="text-center">
+                        <div className="text-2xl font-bold mb-3">
+                          {/* Balansni numberga o'tkazib, formatlaymiz */}
+                          {Number(userInfo.balance || 0).toLocaleString('uz-UZ', { style: 'currency', currency: 'UZS', minimumFractionDigits: 0 })}
+                        </div>
+                        <Button className="w-full" onClick={navigateToAddBalance} disabled={isSubmitting || isLoadingProfile}>
+                          Balansni to'ldirish
+                        </Button>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </div>
             </div>
           </TabsContent>
 
+          {/* --- Tests Tab --- */}
           <TabsContent value="tests">
-            <Card>
+             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center">
-                  <FileText className="mr-2 h-5 w-5 text-blue-500" />
-                  Foydalanuvchi testlari
-                </CardTitle>
-                <CardDescription>Foydalanuvchi tomonidan ishlangan testlar</CardDescription>
+                <CardTitle className="flex items-center"><FileText className="mr-2 h-5 w-5 text-blue-500" />Testlar Tarixi</CardTitle>
+                <CardDescription>Foydalanuvchining topshirgan testlari natijalari</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="border rounded-lg overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="bg-muted/50">
-                          <th className="text-left p-3 font-medium">ID</th>
-                          <th className="text-left p-3 font-medium">Test nomi</th>
-                          <th className="text-left p-3 font-medium">Fan</th>
-                          <th className="text-left p-3 font-medium">Sana</th>
-                          <th className="text-left p-3 font-medium">Ball</th>
-                          <th className="text-left p-3 font-medium">Status</th>
-                          <th className="text-left p-3 font-medium"></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr className="border-t">
-                          <td className="p-3">#1000</td>
-                          <td className="p-3">Test 1</td>
-                          <td className="p-3">Matematika</td>
-                          <td className="p-3">08/04/2025</td>
-                          <td className="p-3 font-medium">91/100</td>
-                          <td className="p-3">
-                            <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                              Tugatilgan
-                            </Badge>
-                          </td>
-                          <td className="p-3">
-                            <Button variant="ghost" size="sm" onClick={() => router.push(`/admin/tests/1000`)}>
-                              Ko'rish
-                            </Button>
-                          </td>
-                        </tr>
-                        <tr className="border-t">
-                          <td className="p-3">#1001</td>
-                          <td className="p-3">Test 2</td>
-                          <td className="p-3">Fizika</td>
-                          <td className="p-3">09/04/2025</td>
-                          <td className="p-3 font-medium">85/100</td>
-                          <td className="p-3">
-                            <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                              Tugatilgan
-                            </Badge>
-                          </td>
-                          <td className="p-3">
-                            <Button variant="ghost" size="sm" onClick={() => router.push(`/admin/tests/1001`)}>
-                              Ko'rish
-                            </Button>
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="payments">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <Wallet className="mr-2 h-5 w-5 text-blue-500" />
-                  Foydalanuvchi to'lovlari
-                </CardTitle>
-                <CardDescription>Foydalanuvchi tomonidan amalga oshirilgan to'lovlar</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="border rounded-lg overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="bg-muted/50">
-                          <th className="text-left p-3 font-medium">ID</th>
-                          <th className="text-left p-3 font-medium">Tavsif</th>
-                          <th className="text-left p-3 font-medium">Tur</th>
-                          <th className="text-right p-3 font-medium">Summa</th>
-                          <th className="text-left p-3 font-medium">Sana</th>
-                          <th className="text-left p-3 font-medium">Status</th>
-                          <th className="text-left p-3 font-medium"></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {paymentsHistoryUser.length > 0 ? (
-                          paymentsHistoryUser.map((paymenthis, index) => (
-                            <tr className="border-t" key={index}>
-                              <td className="p-3">#{paymenthis.id}</td>
-                              <td className="p-3">{paymenthis.type_display || "Noma'lum"}</td>
-                              <td className="p-3">
-                                <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                                  {paymenthis.payment_type || "Noma'lum"}
+                {isLoadingTests && <div className="text-center p-4">Test tarixi yuklanmoqda...</div>}
+                {!isLoadingTests && testHistory.length === 0 && <div className="text-center p-4 text-gray-500">Test tarixi topilmadi.</div>}
+                {!isLoadingTests && testHistory.length > 0 && (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/50">
+                          <tr>
+                            <th className="text-left p-3 font-medium">Natija ID</th>
+                            <th className="text-left p-3 font-medium">Test Nomi</th>
+                            <th className="text-left p-3 font-medium">Fan</th>
+                            <th className="text-left p-3 font-medium">Boshlangan</th>
+                            <th className="text-left p-3 font-medium">Tugatilgan</th>
+                            <th className="text-right p-3 font-medium">Natija</th>
+                            <th className="text-right p-3 font-medium">Foiz (%)</th>
+                            <th className="text-center p-3 font-medium">Holat</th>
+                            <th className="text-right p-3 font-medium">Amallar</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {testHistory.map((item) => (
+                            <tr className="border-t hover:bg-muted/20" key={item.id}>
+                              <td className="p-3">#{item.id}</td>
+                              <td className="p-3">{item.test?.title || 'Noma\'lum'}</td>
+                              <td className="p-3">{item.test?.subject?.name || 'N/A'}</td>
+                              <td className="p-3">{item.start_time ? new Date(item.start_time).toLocaleString() : '-'}</td>
+                              <td className="p-3">{item.end_time ? new Date(item.end_time).toLocaleString() : '-'}</td>
+                              <td className="p-3 text-right font-medium">{item.score_display || item.score}</td>
+                              <td className="p-3 text-right font-medium">{item.percentage?.toFixed(1) ?? '0.0'}%</td>
+                              <td className="p-3 text-center">
+                                <Badge
+                                  variant={getTestStatusVariant(item.status)}
+                                  className={getTestStatusClass(item.status)}
+                                >
+                                  {item.status_display || item.status}
                                 </Badge>
                               </td>
-                              <td className="p-3 text-right font-medium text-green-600">
-                                {paymenthis.amount_display || "0 so'm"}
-                              </td>
-                              <td className="p-3">{paymenthis.created_at || "Noma'lum"}</td>
-                              <td className="p-3">
-                                <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                                  {paymenthis.status_display || "Noma'lum"}
-                                </Badge>
-                              </td>
-                              <td className="p-3">
+                              <td className="p-3 text-right">
                                 <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => router.push(`/admin/payments/${paymenthis.id}`)}
+                                   variant="ghost"
+                                   size="sm"
+                                   onClick={() => router.push(`/admin/test-results/${item.id}`)}
+                                   disabled={!item.id}
                                 >
                                   Ko'rish
                                 </Button>
                               </td>
                             </tr>
-                          ))
-                        ) : (
-                          <tr>
-                            <td colSpan={7} className="p-3 text-center text-gray-500">
-                              To'lov tarixi mavjud emas
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                     {/* Sahifalash kerak bo'lsa, shu yerga qo'shiladi */}
                   </div>
-                </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
 
-          <TabsContent value="statistics">
-            <Card>
+          {/* --- Payments Tab --- */}
+          <TabsContent value="payments">
+             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center">
-                  <BarChart2 className="mr-2 h-5 w-5 text-blue-500" />
-                  Foydalanuvchi statistikasi
-                </CardTitle>
-                <CardDescription>Foydalanuvchining o'qish ko'rsatkichlari</CardDescription>
+                <CardTitle className="flex items-center"><Wallet className="mr-2 h-5 w-5 text-blue-500" />To'lovlar Tarixi</CardTitle>
+                <CardDescription>Foydalanuvchining barcha moliyaviy operatsiyalari</CardDescription>
               </CardHeader>
               <CardContent>
-                {statistichis.length > 0 ? (
-                  statistichis.map((value, index) => (
-                    <div key={index} className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-                      <Card>
-                        <CardContent className="p-4">
-                          <div className="text-sm text-gray-500">Tugatilgan testlar</div>
-                          <div className="text-2xl font-bold">{value.completed_tests || 0}</div>
-                        </CardContent>
-                      </Card>
-                      <Card>
-                        <CardContent className="p-4">
-                          <div className="text-sm text-gray-500">O'rtacha ball</div>
-                          <div className="text-2xl font-bold">{value.average_score || 0}%</div>
-                        </CardContent>
-                      </Card>
-                      <Card>
-                        <CardContent className="p-4">
-                          <div className="text-sm text-gray-500">Jami to'lovlar</div>
-                          <div className="text-2xl font-bold">{value.total_payments || 0} so'm</div>
-                        </CardContent>
-                      </Card>
+                {isLoadingPayments && <div className="text-center p-4">To'lovlar tarixi yuklanmoqda...</div>}
+                {!isLoadingPayments && paymentsHistoryUser.length === 0 && <div className="text-center p-4 text-gray-500">To'lovlar tarixi mavjud emas.</div>}
+                {!isLoadingPayments && paymentsHistoryUser.length > 0 && (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/50">
+                          <tr>
+                            <th className="text-left p-3 font-medium">ID</th>
+                            <th className="text-left p-3 font-medium">Turi</th>
+                            <th className="text-left p-3 font-medium">Tavsif</th>
+                             <th className="text-right p-3 font-medium">Summa</th>
+                             <th className="text-left p-3 font-medium">Usul</th>
+                            <th className="text-left p-3 font-medium">Sana</th>
+                            <th className="text-center p-3 font-medium">Holat</th>
+                            <th className="text-right p-3 font-medium">Amallar</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {paymentsHistoryUser.map((payment) => (
+                            <tr className="border-t hover:bg-muted/20" key={payment.id}>
+                              <td className="p-3">#{payment.id}</td>
+                              <td className="p-3">
+                                <Badge variant={payment.payment_type === 'deposit' ? 'default' : 'secondary'}>
+                                    {payment.type_display || payment.payment_type}
+                                </Badge>
+                              </td>
+                              <td className="p-3">{payment.description || '-'}</td>
+                              <td className={`p-3 text-right font-medium ${Number(payment.amount || 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {payment.amount_display || `${Number(payment.amount || 0).toLocaleString('uz-UZ')} so'm`}
+                              </td>
+                              <td className="p-3">{payment.method_display || payment.payment_method || '-'}</td>
+                              <td className="p-3">{payment.created_at ? new Date(payment.created_at).toLocaleString() : '-'}</td>
+                              <td className="p-3 text-center">
+                                <Badge
+                                  variant={getPaymentStatusVariant(payment.status)}
+                                  className={getPaymentStatusClass(payment.status)}
+                                >
+                                  {payment.status_display || payment.status}
+                                </Badge>
+                              </td>
+                              <td className="p-3 text-right">
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => router.push(`/admin/payments/${payment.id}`)}
+                                    disabled={!payment.id}
+                                >
+                                  Ko'rish
+                                </Button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
-                  ))
-                ) : (
-                  <div className="text-center p-4">
-                    <p className="text-gray-500">Statistika ma'lumotlari mavjud emas</p>
+                     {/* Sahifalash kerak bo'lsa, shu yerga qo'shiladi */}
                   </div>
                 )}
-                <div className="text-center p-10 border rounded-lg">
-                  <p className="text-gray-500">Bu yerda foydalanuvchi statistikasi grafiklari bo'ladi</p>
-                  <Button
-                    className="mt-4"
-                    variant="outline"
-                    onClick={() => router.push(`/admin/statistics/users/${userId}`)}
-                  >
-                    Batafsil statistika
-                  </Button>
-                </div>
+              </CardContent>
+               <CardFooter className="flex justify-end">
+                    {/* Frontendda Excel/PDF generatsiya qilish logikasi bu tugmaga bog'lanadi */}
+                    <Button variant="outline" disabled={isLoadingPayments || paymentsHistoryUser.length === 0}>
+                        Hisobot Yuklash (Excel/PDF)
+                    </Button>
+               </CardFooter>
+            </Card>
+          </TabsContent>
+
+          {/* --- Statistics Tab --- */}
+          <TabsContent value="statistics">
+             <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center"><BarChart2 className="mr-2 h-5 w-5 text-blue-500" />Umumiy Statistika</CardTitle>
+                <CardDescription>Foydalanuvchining asosiy ko'rsatkichlari</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {isLoadingStats && <div className="text-center p-4">Statistika yuklanmoqda...</div>}
+                {!isLoadingStats && !statistics && <div className="text-center p-4 text-gray-500">Statistika ma'lumotlari mavjud emas yoki yuklashda xatolik.</div>}
+                {/* Statistikani faqat mavjud bo'lganda ko'rsatamiz */}
+                {statistics && (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+                      {/* Completed Tests Card */}
+                       <Card>
+                         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                           <CardTitle className="text-sm font-medium">Tugatilgan testlar</CardTitle>
+                           <FileText className="h-4 w-4 text-muted-foreground" />
+                         </CardHeader>
+                         <CardContent>
+                           <div className="text-2xl font-bold">{statistics.completed_tests ?? 0}</div>
+                         </CardContent>
+                       </Card>
+                       {/* Average Score Card */}
+                       <Card>
+                          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                           <CardTitle className="text-sm font-medium">O'rtacha ball (%)</CardTitle>
+                           <BarChart2 className="h-4 w-4 text-muted-foreground" />
+                         </CardHeader>
+                         <CardContent>
+                           {/* average_score null bo'lishi mumkin */}
+                           <div className="text-2xl font-bold">{statistics.average_score ? `${statistics.average_score.toFixed(1)}%` : 'N/A'}</div>
+                           <p className="text-xs text-muted-foreground">Barcha tugatilgan testlar bo'yicha</p>
+                         </CardContent>
+                       </Card>
+                       {/* Total Payments Card */}
+                       <Card>
+                         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                           <CardTitle className="text-sm font-medium">Jami to'lovlar</CardTitle>
+                           <Wallet className="h-4 w-4 text-muted-foreground" />
+                         </CardHeader>
+                         <CardContent>
+                            <div className="text-2xl font-bold">
+                               {/* total_payments_display yoki formatlangan total_payments */}
+                               {statistics.total_payments_display || Number(statistics.total_payments || 0).toLocaleString('uz-UZ', { style: 'currency', currency: 'UZS', minimumFractionDigits: 0 })}
+                            </div>
+                            <p className="text-xs text-muted-foreground">Barcha muvaffaqiyatli to'lovlar summasi</p>
+                         </CardContent>
+                       </Card>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

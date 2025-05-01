@@ -24,8 +24,6 @@ export default function MaterialsPage() {
         },
       })
       .then((res) => {
-        console.log(27, res)
-        console.log(28, res.data.results)
         setMater(res.data.results) // Set the API data to the state
       })
       .catch((err) => {

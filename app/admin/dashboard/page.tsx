@@ -267,7 +267,7 @@ export default function AdminDashboard() {
                               <td className="p-3">
                                 <Badge
                                   variant="outline"
-                                  className={`border px-2 py-1 text-sm font-medium rounded 
+                                  className={`border px-2  text-sm font-medium rounded-2xl 
     ${value?.status_display === "Faol"
                                       ? "bg-green-50 text-green-700 border-green-200"
                                       : "bg-red-50 text-red-700 border-red-200"}`}

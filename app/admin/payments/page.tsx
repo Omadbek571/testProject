@@ -14,7 +14,6 @@ export default function PaymentsPage() {
   const router = useRouter()
   const [searchQuery, setSearchQuery] = useState("")
   const [infoPayments, setInfoPayments] = useState([])
-  console.log(17, infoPayments)
 
   useEffect(() => {
     axios
@@ -25,7 +24,6 @@ export default function PaymentsPage() {
         },
       })
       .then((res) => {
-        console.log(27, res)
         setInfoPayments(res.data.results)
       })
       .catch((err) => {
